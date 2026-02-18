@@ -3,462 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>TrickMaster Pro Cloud</title>
+    <title>TrickMaster Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
-    
-    <!-- Firebase SDKs -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Configuration and Setup
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'trickmaster-pro';
-
-        let currentUser = null;
-        let unsubscribeData = null;
-
-        // Application State
-        window.state = {
-            onboarded: false,
-            isPro: false,
-            hobbies: [], 
-            activeHobby: "",
-            view: "goals",
-            skills: [],
-            sessions: [],
-            expandedYears: [new Date().getFullYear()],
-            isSyncing: false
-        };
-
-        // Initialize Auth (RULE 3)
-        const initAuth = async () => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                console.error("Auth error:", error);
-            }
-        };
-
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                currentUser = user;
-                setupFirestoreListeners();
-            } else {
-                initAuth();
-            }
-        });
-
-        // Firestore Listeners (RULE 1 & 2)
-        function setupFirestoreListeners() {
-            if (unsubscribeData) unsubscribeData();
-
-            const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'settings', 'profile');
-            
-            // Listen to data changes
-            unsubscribeData = onSnapshot(userDocRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    const cloudData = docSnap.data();
-                    // Merge cloud data into state
-                    window.state = { ...window.state, ...cloudData };
-                    render();
-                } else {
-                    // New user: Initial save to Firestore
-                    saveToCloud();
-                }
-            }, (error) => {
-                console.error("Firestore error:", error);
-            });
-        }
-
-        // Save Function
-        window.saveToCloud = async () => {
-            if (!currentUser) return;
-            window.state.isSyncing = true;
-            render();
-
-            try {
-                const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'settings', 'profile');
-                await setDoc(userDocRef, {
-                    onboarded: window.state.onboarded,
-                    isPro: window.state.isPro,
-                    hobbies: window.state.hobbies,
-                    activeHobby: window.state.activeHobby,
-                    view: window.state.view,
-                    skills: window.state.skills,
-                    sessions: window.state.sessions,
-                    expandedYears: window.state.expandedYears
-                }, { merge: true });
-                
-                setTimeout(() => {
-                    window.state.isSyncing = false;
-                    render();
-                }, 500);
-            } catch (error) {
-                window.state.isSyncing = false;
-                render();
-                console.error("Cloud Save Error:", error);
-            }
-        };
-
-        // UI Logic
-        let currentCalDate = new Date();
-        const onboardingSteps = [
-            { t: "FOKUS", d: "TrickMaster hjelper deg å mestre ferdighetene du drømmer om. Enkelt og effektivt." },
-            { t: "KONSEKVENS", d: "Vi sporer din 'streak' på tvers av alle idretter. Skatboard i dag, surfing i morgen - hold liv i flammen." },
-            { t: "MESTRING", d: "Når du lander et triks eller en ferdighet, arkiveres det for alltid. Bygg din arv." }
-        ];
-        let obStep = 0;
-        let editingHobbyName = null;
-        let pressTimer;
-
-        window.init = () => {
-            setTimeout(() => {
-                const splash = document.getElementById('splash');
-                if(splash) {
-                    splash.style.opacity = '0';
-                    setTimeout(() => splash.remove(), 500);
-                }
-            }, 1000);
-            render();
-        };
-
-        window.updateOnboarding = () => {
-            document.getElementById('ob-title').innerText = onboardingSteps[obStep].t;
-            document.getElementById('ob-text').innerText = onboardingSteps[obStep].d;
-        };
-
-        window.handleOnboardingNext = () => {
-            if (obStep < onboardingSteps.length - 1) {
-                obStep++;
-                updateOnboarding();
-            } else if (obStep === onboardingSteps.length - 1) {
-                document.getElementById('onboarding-step-content').classList.add('hidden');
-                document.getElementById('onboarding-hobby-input').classList.remove('hidden');
-                document.getElementById('ob-btn').innerText = "Kom i gang";
-                obStep++;
-            } else {
-                const name = document.getElementById('first-hobby-name').value.trim();
-                if (!name) return;
-                window.state.hobbies = [name];
-                window.state.activeHobby = name;
-                window.state.onboarded = true;
-                saveToCloud();
-                document.getElementById('onboarding').classList.add('hidden');
-            }
-        };
-
-        window.render = () => {
-            if (window.state.onboarded) {
-                document.getElementById('onboarding').classList.add('hidden');
-            } else {
-                document.getElementById('onboarding').classList.remove('hidden');
-                updateOnboarding();
-            }
-
-            // Sync Status
-            const syncDot = document.getElementById('sync-status');
-            syncDot.className = window.state.isSyncing ? "w-2 h-2 rounded-full bg-orange-400 animate-pulse" : "w-2 h-2 rounded-full bg-green-500";
-
-            const hobbySkills = window.state.skills.filter(s => s.h === window.state.activeHobby);
-            const activeHobbySkills = hobbySkills.filter(s => !s.l);
-            const landed = hobbySkills.filter(s => s.l);
-            const pct = hobbySkills.length ? Math.round((landed.length / hobbySkills.length) * 100) : 0;
-            
-            document.getElementById('prog-circle').style.strokeDashoffset = 264 - (pct/100)*264;
-            document.getElementById('prog-text').innerText = pct + "%";
-            document.getElementById('view-title').innerText = window.state.view === 'goals' ? "Skills" : "Arkiv";
-            document.getElementById('view-sub').innerText = window.state.activeHobby ? window.state.activeHobby + " • " + hobbySkills.length + " Totalt" : "Velg en hobby";
-            
-            if (window.state.isPro) {
-                document.getElementById('pro-badge').classList.remove('hidden');
-            } else {
-                document.getElementById('pro-badge').classList.add('hidden');
-            }
-
-            const streak = calcStreak();
-            const sb = document.getElementById('streak-badge');
-            if (streak > 0) { sb.classList.remove('hidden'); document.getElementById('streak-val').innerText = streak; }
-            else sb.classList.add('hidden');
-
-            document.getElementById('stat-hobby-name').innerText = window.state.activeHobby || "---";
-            document.getElementById('stat-sessions').innerText = window.state.sessions.filter(s => s.h === window.state.activeHobby).length + " Økter";
-            renderWeekDots();
-
-            document.getElementById('hobby-tabs').innerHTML = window.state.hobbies.map(h => `
-                <div class="hobby-tab flex items-center shrink-0 bg-gray-50 px-4 py-2 rounded-full border ${window.state.activeHobby===h?'border-black bg-white shadow-sm':'border-transparent'}"
-                     onmousedown="handleHobbyTouchStart('${h}')" 
-                     onmouseup="handleHobbyTouchEnd()"
-                     ontouchstart="handleHobbyTouchStart('${h}')" 
-                     ontouchend="handleHobbyTouchEnd()">
-                    <button onclick="state.activeHobby='${h}';saveToCloud();" class="text-[10px] font-black uppercase tracking-wider ${window.state.activeHobby===h?'text-black':'text-gray-400'}">
-                        ${h}
-                    </button>
-                </div>
-            `).join('');
-
-            const list = document.getElementById('main-content');
-            
-            if (!window.state.activeHobby) {
-                list.innerHTML = `<div class="py-20 text-center text-gray-300 text-[10px] font-black uppercase tracking-[0.2em]">Legg til en aktivitet først</div>`;
-            } else if (window.state.view === 'history') {
-                if (landed.length === 0) {
-                    list.innerHTML = `<div class="py-20 text-center text-gray-200 text-[10px] font-black uppercase tracking-[0.2em]">Ingen skills landet ennå</div>`;
-                } else {
-                    const grouped = landed.reduce((acc, s) => {
-                        const year = s.d.split('.').pop();
-                        if (!acc[year]) acc[year] = [];
-                        acc[year].push(s);
-                        return acc;
-                    }, {});
-
-                    const years = Object.keys(grouped).sort((a, b) => b - a);
-                    
-                    list.innerHTML = years.map(year => {
-                        const isOpen = window.state.expandedYears.includes(parseInt(year));
-                        const items = grouped[year].sort((a,b) => new Date(b.d.split('.').reverse().join('-')) - new Date(a.d.split('.').reverse().join('-')));
-                        
-                        return `
-                        <div class="mb-4 ${isOpen ? 'accordion-open' : ''}">
-                            <button onclick="toggleYear(${year})" class="w-full flex justify-between items-center py-4 border-b-2 border-black">
-                                <span class="text-2xl font-black italic uppercase tracking-tighter">${year}</span>
-                                <svg class="rotate-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-                            </button>
-                            <div class="accordion-content">
-                                ${items.map(s => `
-                                    <div class="flex justify-between items-center py-4 border-b border-gray-100 fade-in">
-                                        <div>
-                                            <div class="text-[10px] font-black uppercase text-gray-400 tracking-widest leading-none mb-1">${s.d}</div>
-                                            <div class="text-sm font-bold text-gray-800">${s.n}</div>
-                                        </div>
-                                        <button onclick="unland(${s.id})" class="text-[8px] font-black uppercase tracking-widest bg-gray-50 px-3 py-1.5 rounded-full text-gray-400 hover:text-black">Angre</button>
-                                    </div>
-                                `).join('')}
-                            </div>
-                        </div>
-                        `;
-                    }).join('');
-                }
-            } else {
-                list.innerHTML = activeHobbySkills.length === 0 ? `<div class="py-20 text-center text-gray-200 text-[10px] font-black uppercase tracking-[0.2em]">Ingen mål her ennå</div>` :
-                activeHobbySkills.map(s => `
-                    <div class="mb-8 fade-in">
-                        <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-xl font-extrabold tracking-tight">${s.n}</h3>
-                            <button onclick="delSkill(${s.id})" class="text-gray-200 p-2">✕</button>
-                        </div>
-                        <div class="grid grid-cols-3 gap-2">
-                            <button onclick="setS(${s.id},1)" class="py-4 rounded-2xl border text-[9px] font-black uppercase ${s.s===1?'bg-black text-white':'border-gray-100 text-gray-300'}">Klar</button>
-                            <button onclick="setS(${s.id},2)" class="py-4 rounded-2xl border text-[9px] font-black uppercase ${s.s===2?'bg-orange-500 text-white border-orange-500':'border-gray-100 text-gray-300'}">Øver</button>
-                            <button onclick="land(${s.id})" class="py-4 rounded-2xl border border-gray-100 text-[9px] font-black uppercase hover:bg-[var(--brand-neon)] hover:text-black transition-all">Landa!</button>
-                        </div>
-                    </div>
-                `).join('');
-            }
-
-            document.getElementById('icon-goals').style.color = window.state.view === 'goals' ? '#000' : '#d1d5db';
-            document.getElementById('icon-history').style.color = window.state.view === 'history' ? '#000' : '#d1d5db';
-            
-            if(!document.getElementById('cal-modal').classList.contains('hidden')) renderCalendar();
-        };
-
-        window.toggleYear = (year) => {
-            const y = parseInt(year);
-            if (window.state.expandedYears.includes(y)) {
-                window.state.expandedYears = window.state.expandedYears.filter(item => item !== y);
-            } else {
-                window.state.expandedYears.push(y);
-            }
-            saveToCloud();
-        };
-
-        function calcStreak() {
-            const days = [...new Set(window.state.sessions.map(s => new Date(s.t).toDateString()))]
-                .map(d => new Date(d)).sort((a,b) => b-a);
-            if (!days.length) return 0;
-            const today = new Date(new Date().toDateString());
-            const yesterday = new Date(today); yesterday.setDate(today.getDate()-1);
-            if (days[0] < yesterday) return 0;
-            let s = 1;
-            for (let i=0; i<days.length-1; i++) {
-                if (Math.abs(days[i]-days[i+1])/(1000*60*60*24) <= 1) s++; else break;
-            }
-            return s;
-        }
-
-        function renderWeekDots() {
-            const now = new Date();
-            const start = new Date(now.setDate(now.getDate() - (now.getDay()||7) + 1));
-            let h = "";
-            for(let i=0; i<7; i++) {
-                const d = new Date(start); d.setDate(start.getDate()+i);
-                const done = window.state.sessions.some(s => new Date(s.t).toDateString() === d.toDateString() && s.h === window.state.activeHobby);
-                h += `<div class="w-2.5 h-2.5 rounded-full ${done?'bg-[var(--brand-neon)] shadow-[0_0_8px_var(--brand-neon)]':'bg-white/10'}"></div>`;
-            }
-            document.getElementById('week-dots').innerHTML = h;
-        }
-
-        window.logSession = () => {
-            if (!window.state.activeHobby) return;
-            const todayStr = new Date().toDateString();
-            if (window.state.sessions.some(s => new Date(s.t).toDateString() === todayStr && s.h === window.state.activeHobby)) return;
-            window.state.sessions.push({t: Date.now(), h: window.state.activeHobby});
-            confetti({particleCount: 50, spread: 60, colors: ['#d4ff00', '#000000']});
-            saveToCloud();
-        };
-
-        window.changeMonth = (dir) => {
-            currentCalDate.setMonth(currentCalDate.getMonth() + dir);
-            renderCalendar();
-        };
-
-        window.toggleManualSession = (timestamp) => {
-            if (!window.state.activeHobby) return;
-            const dateStr = new Date(timestamp).toDateString();
-            const index = window.state.sessions.findIndex(s => new Date(s.t).toDateString() === dateStr && s.h === window.state.activeHobby);
-            if (index > -1) window.state.sessions.splice(index, 1);
-            else window.state.sessions.push({t: timestamp, h: window.state.activeHobby});
-            saveToCloud();
-        };
-
-        window.renderCalendar = () => {
-            const grid = document.getElementById('calendar-grid');
-            grid.innerHTML = "";
-            
-            const monthNames = ["Januar", "Februar", "Mars", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Desember"];
-            document.getElementById('cal-month-name').innerText = `${monthNames[currentCalDate.getMonth()]} ${currentCalDate.getFullYear()}`;
-            
-            const firstDayOfMonth = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth(), 1).getDay();
-            const adjustedFirstDay = firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1;
-            const daysInMonth = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + 1, 0).getDate();
-            
-            for(let i=0; i<adjustedFirstDay; i++) grid.innerHTML += `<div class="aspect-square opacity-0"></div>`;
-
-            let totalActiveLogged = 0;
-            document.getElementById('cal-active-h-name').innerText = window.state.activeHobby || "Aktiv";
-
-            for(let i=1; i<=daysInMonth; i++) {
-                const targetDate = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth(), i);
-                const dateCheck = targetDate.toDateString();
-                const daySessions = window.state.sessions.filter(s => new Date(s.t).toDateString() === dateCheck);
-                const hasActive = daySessions.some(s => s.h === window.state.activeHobby);
-                const hasOthers = daySessions.some(s => s.h !== window.state.activeHobby);
-                
-                if (hasActive) totalActiveLogged++;
-
-                let dotClass = "cal-dot-empty";
-                if (hasActive && hasOthers) dotClass = "cal-dot-multi";
-                else if (hasActive) dotClass = "cal-dot-active";
-                else if (hasOthers) dotClass = "cal-dot-other";
-
-                grid.innerHTML += `<button onclick="toggleManualSession(${targetDate.getTime()})" class="aspect-square rounded-xl flex items-center justify-center text-[10px] transition-all active:scale-90 ${dotClass}">${i}</button>`;
-            }
-            
-            document.getElementById('cal-streak').innerText = calcStreak() + " 🔥";
-            document.getElementById('cal-total').innerText = totalActiveLogged + " Dager";
-        };
-
-        window.saveSkill = () => {
-            const n = document.getElementById('skill-input').value.trim();
-            if (!n || !window.state.activeHobby) return;
-            const activeHobbySkills = window.state.skills.filter(s => s.h === window.state.activeHobby && !s.l);
-            if (!window.state.isPro && activeHobbySkills.length >= 2) {
-                closeModals();
-                document.getElementById('pro-modal').classList.remove('hidden');
-                return;
-            }
-            window.state.skills.push({id:Date.now(), n, h:window.state.activeHobby, s:1, l:false});
-            document.getElementById('skill-input').value = "";
-            closeModals();
-            saveToCloud();
-        };
-
-        window.land = (id) => {
-            const s = window.state.skills.find(x => x.id === id);
-            s.l = true; 
-            const d = new Date();
-            s.d = `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}.${d.getFullYear()}`;
-            confetti({particleCount: 200, spread: 120, origin: { y: 0.6 }, colors: ['#d4ff00', '#000000', '#ffffff']});
-            saveToCloud();
-        };
-
-        window.unland = (id) => { window.state.skills.find(x => x.id===id).l = false; saveToCloud(); };
-        window.delSkill = (id) => { window.state.skills = window.state.skills.filter(x => x.id!==id); saveToCloud(); };
-        window.setS = (id, s) => { window.state.skills.find(x => x.id===id).s = s; saveToCloud(); };
-        window.changeView = (v) => { window.state.view = v; saveToCloud(); };
-
-        window.handleHobbyTouchStart = (h) => {
-            pressTimer = window.setTimeout(function() {
-                openHobbyModal(h);
-            }, 600);
-        };
-
-        window.handleHobbyTouchEnd = () => {
-            clearTimeout(pressTimer);
-        };
-
-        window.openHobbyModal = (hobbyName = null) => {
-            editingHobbyName = hobbyName;
-            if (!hobbyName && !window.state.isPro && window.state.hobbies.length >= 1) {
-                document.getElementById('pro-modal').classList.remove('hidden');
-                return;
-            }
-            const modal = document.getElementById('hobby-modal');
-            const input = document.getElementById('hobby-input');
-            const delBtn = document.getElementById('delete-hobby-btn');
-            input.value = hobbyName || "";
-            if (hobbyName) delBtn.classList.remove('hidden'); else delBtn.classList.add('hidden');
-            modal.classList.remove('hidden');
-        };
-
-        window.saveHobby = () => {
-            const newName = document.getElementById('hobby-input').value.trim();
-            if (!newName) return;
-            if (editingHobbyName) {
-                window.state.hobbies = window.state.hobbies.map(h => h === editingHobbyName ? newName : h);
-                window.state.skills.forEach(s => { if(s.h === editingHobbyName) s.h = newName; });
-                window.state.sessions.forEach(s => { if(s.h === editingHobbyName) s.h = newName; });
-                if (window.state.activeHobby === editingHobbyName) window.state.activeHobby = newName;
-            } else {
-                window.state.hobbies.push(newName);
-                if (!window.state.activeHobby) window.state.activeHobby = newName;
-            }
-            closeModals(); saveToCloud();
-        };
-
-        window.deleteHobby = () => {
-            if (!editingHobbyName) return;
-            window.state.hobbies = window.state.hobbies.filter(h => h !== editingHobbyName);
-            window.state.skills = window.state.skills.filter(s => s.h !== editingHobbyName);
-            window.state.sessions = window.state.sessions.filter(s => s.h !== editingHobbyName);
-            if (window.state.activeHobby === editingHobbyName) window.state.activeHobby = window.state.hobbies[0] || "";
-            closeModals(); saveToCloud();
-        };
-
-        window.openAddSkill = () => { if(!window.state.activeHobby) return openHobbyModal(); document.getElementById('skill-modal').classList.remove('hidden'); };
-        window.closeModals = () => { 
-            document.querySelectorAll('[id$="-modal"]').forEach(m => m.classList.add('hidden')); 
-            document.getElementById('pro-modal').classList.add('hidden');
-            document.getElementById('pro-content').classList.remove('hidden');
-            document.getElementById('pro-success').classList.add('hidden');
-            const btn = document.getElementById('buy-pro-btn');
-            btn.innerHTML = `Lås opp for $4.99`;
-            btn.disabled = false;
-        };
-        window.toggleCalendar = () => { document.getElementById('cal-modal').classList.remove('hidden'); renderCalendar(); };
-
-        window.onload = init;
-    </script>
-
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
         
@@ -500,7 +47,7 @@
         }
 
         @keyframes shimmer {
-            0 { transform: translateX(-100%); }
+            0% { transform: translateX(-100%); }
             100% { transform: translateX(200%); }
         }
         .animate-shimmer { animation: shimmer 1.5s infinite; }
@@ -523,6 +70,7 @@
             transform: rotate(180deg);
         }
 
+        /* Long press visual feedback */
         .hobby-tab {
             transition: transform 0.1s ease;
         }
@@ -543,39 +91,44 @@
         </div>
     </div>
 
-    <!-- Sync Indicator -->
-    <div class="fixed top-2 right-4 z-[1000] flex items-center gap-2">
-        <div id="sync-status" class="w-2 h-2 rounded-full bg-gray-300"></div>
-    </div>
-
     <!-- Onboarding -->
     <div id="onboarding" class="hidden fixed inset-0 bg-white z-[500] flex flex-col p-10 justify-center">
         <div id="onboarding-step-content" class="flex-1 flex flex-col justify-center">
-            <h2 id="ob-title" class="text-4xl sm:text-5xl font-black italic uppercase leading-none tracking-tighter mb-6">FOKUS</h2>
-            <p id="ob-text" class="text-gray-500 text-lg leading-relaxed">...</p>
+            <h2 id="ob-title" class="text-4xl sm:text-5xl font-black italic uppercase leading-none tracking-tighter mb-6">FOCUS</h2>
+            <p id="ob-text" class="text-gray-500 text-lg leading-relaxed">TrickMaster helps you master the skills you dream of. Simple and effective.</p>
         </div>
         <div id="onboarding-hobby-input" class="hidden flex-1 flex flex-col justify-center">
-            <h2 class="text-4xl font-black italic uppercase tracking-tighter mb-4">Hva er din sport?</h2>
-            <p class="text-gray-400 mb-8 uppercase text-[10px] font-bold tracking-widest">Legg til din første hobby (f.eks. Skate)</p>
-            <input id="first-hobby-name" type="text" placeholder="Navn..." class="text-2xl font-bold border-b-4 border-black pb-4 focus:outline-none mb-10 bg-transparent">
+            <h2 class="text-4xl font-black italic uppercase tracking-tighter mb-4">What's your sport?</h2>
+            <p class="text-gray-400 mb-8 uppercase text-[10px] font-bold tracking-widest">Add your first hobby (e.g. Skate)</p>
+            <input id="first-hobby-name" type="text" placeholder="Name..." class="text-2xl font-bold border-b-4 border-black pb-4 focus:outline-none mb-10 bg-transparent">
         </div>
-        <button id="ob-btn" onclick="handleOnboardingNext()" class="w-full bg-black text-white py-6 rounded-[2rem] font-black uppercase tracking-widest text-sm">Neste</button>
+        <button id="ob-btn" onclick="handleOnboardingNext()" class="w-full bg-black text-white py-6 rounded-[2rem] font-black uppercase tracking-widest text-sm">Next</button>
     </div>
 
     <!-- Pro Paywall Modal -->
     <div id="pro-modal" class="hidden fixed inset-0 bg-black z-[900] p-8 flex flex-col text-white">
-        <button onclick="closeModals()" class="self-end text-white/50 p-2 font-black uppercase tracking-widest text-[10px]">Lukk</button>
+        <button onclick="closeModals()" class="self-end text-white/50 p-2 font-black uppercase tracking-widest text-[10px]">Close</button>
         <div id="pro-content" class="flex-1 flex flex-col justify-center items-center text-center">
-            <div class="bg-[var(--brand-neon)] text-black px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest mb-6">Pro Funksjon</div>
-            <h2 class="text-5xl font-black italic uppercase tracking-tighter leading-none mb-6">Ubegrenset<br>Mestring</h2>
-            <p class="text-gray-400 text-sm mb-10 px-4">Gratisversjonen er begrenset til 1 aktivitet og 2 aktive mål. Oppgrader for full tilgang.</p>
-            <button id="buy-pro-btn" onclick="alert('Demo kun: Betaling ikke integrert')" class="w-full bg-[var(--brand-neon)] text-black py-6 rounded-[2rem] font-black uppercase tracking-widest text-lg shadow-[0_0_30px_rgba(212,255,0,0.3)] active:scale-95 transition-all">Lås opp for $4.99</button>
+            <div class="bg-[var(--brand-neon)] text-black px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest mb-6">Pro Feature</div>
+            <h2 class="text-5xl font-black italic uppercase tracking-tighter leading-none mb-6">Unlimited<br>Mastery</h2>
+            <p class="text-gray-400 text-sm mb-10 px-4">The free version is limited to 1 hobby and 2 active skills. Upgrade for full access.</p>
+            
+            <button id="buy-pro-btn" onclick="processPayment()" class="w-full bg-[var(--brand-neon)] text-black py-6 rounded-[2rem] font-black uppercase tracking-widest text-lg shadow-[0_0_30px_rgba(212,255,0,0.3)] active:scale-95 transition-all">Unlock for $4.99</button>
+        </div>
+        <div id="pro-success" class="hidden flex-1 flex flex-col justify-center items-center text-center">
+            <div class="w-20 h-20 bg-[var(--brand-neon)] rounded-full flex items-center justify-center mb-6">
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            </div>
+            <h2 class="text-4xl font-black italic uppercase tracking-tighter mb-4">You're Pro!</h2>
+            <p class="text-gray-400 mb-10">All limitations removed. Go master some skills!</p>
+            <button onclick="closeModals()" class="w-full bg-white text-black py-5 rounded-[2rem] font-black uppercase tracking-widest">Back to App</button>
         </div>
     </div>
 
     <!-- Header -->
     <header class="px-6 safe-top pt-8 pb-4 flex justify-between items-end">
         <div class="flex items-center gap-4">
+            <!-- Progress & Calendar Toggle -->
             <button onclick="toggleCalendar()" class="relative w-16 h-16 flex items-center justify-center active:scale-95 transition-transform">
                 <svg width="64" height="64" viewBox="0 0 100 100">
                     <circle cx="50" cy="50" r="42" stroke="#f3f4f6" stroke-width="8" fill="none" />
@@ -592,7 +145,7 @@
                     <h1 id="view-title" class="text-4xl font-extrabold italic uppercase tracking-tighter leading-none">Skills</h1>
                     <div id="pro-badge" class="hidden bg-black text-[var(--brand-neon)] px-2 py-0.5 rounded text-[8px] font-black italic tracking-tighter">PRO</div>
                 </div>
-                <p id="view-sub" class="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-1">Laster...</p>
+                <p id="view-sub" class="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-1">No active hobby</p>
             </div>
         </div>
     </header>
@@ -602,13 +155,13 @@
         <div class="bg-black rounded-[2.5rem] p-7 text-white shadow-2xl relative overflow-hidden">
             <div class="flex justify-between items-center relative z-10">
                 <div class="flex-1">
-                    <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-3" id="hobby-label">Denne uken</p>
+                    <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-3" id="hobby-label">This Week</p>
                     <div id="week-dots" class="flex gap-2"></div>
                 </div>
-                <button id="log-btn" onclick="logSession()" class="bg-[var(--brand-neon)] text-black px-8 py-4 rounded-2xl text-xs font-black uppercase tracking-widest active:scale-95 transition-all">Logg Økt</button>
+                <button id="log-btn" onclick="logSession()" class="bg-[var(--brand-neon)] text-black px-8 py-4 rounded-2xl text-xs font-black uppercase tracking-widest active:scale-95 transition-all">Log Session</button>
             </div>
             <div class="flex justify-between text-[8px] font-black uppercase text-gray-500 border-t border-white/10 mt-6 pt-4 relative z-10">
-                <span id="stat-sessions">0 Økter</span>
+                <span id="stat-sessions">0 Sessions</span>
                 <span id="stat-hobby-name">---</span>
             </div>
         </div>
@@ -616,7 +169,7 @@
 
     <!-- Tabs -->
     <section class="px-6 mb-4 flex flex-col gap-2">
-        <p class="text-[8px] font-black text-gray-300 uppercase tracking-widest ml-1">Hold inne for å redigere</p>
+        <p class="text-[8px] font-black text-gray-300 uppercase tracking-widest ml-1">Hold to edit</p>
         <div class="flex items-center gap-4 overflow-x-auto no-scrollbar">
             <div id="hobby-tabs" class="flex gap-4 border-b border-gray-100 pb-2"></div>
             <button onclick="openHobbyModal()" class="text-gray-300 p-2 mb-2 hover:text-black transition-colors shrink-0">
@@ -632,51 +185,51 @@
     <nav class="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/90 backdrop-blur-md border-t border-gray-100 px-10 safe-bottom pb-6 pt-4 flex justify-between items-center z-50">
         <button onclick="changeView('goals')" class="flex flex-col items-center gap-1">
             <svg id="icon-goals" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-            <span class="text-[8px] font-black uppercase tracking-widest">Mål</span>
+            <span class="text-[8px] font-black uppercase tracking-widest">Goals</span>
         </button>
         <button onclick="openAddSkill()" class="bg-black text-white w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl -mt-12 border-8 border-white">
             <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M12 4v16m8-8H4"/></svg>
         </button>
         <button onclick="changeView('history')" class="flex flex-col items-center gap-1">
             <svg id="icon-history" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
-            <span class="text-[8px] font-black uppercase tracking-widest">Arkiv</span>
+            <span class="text-[8px] font-black uppercase tracking-widest">Archive</span>
         </button>
     </nav>
 
     <!-- Modals -->
     <div id="skill-modal" class="hidden fixed inset-0 bg-white z-[600] p-10 flex flex-col">
         <button onclick="closeModals()" class="self-end text-2xl p-4">✕</button>
-        <h2 class="text-4xl font-black italic uppercase tracking-tighter mb-10">Ny Skill</h2>
-        <input id="skill-input" type="text" placeholder="Hva øver du på?" class="text-2xl font-bold border-b-4 border-black pb-4 focus:outline-none bg-transparent mb-10">
-        <button onclick="saveSkill()" class="w-full bg-black text-white py-5 rounded-2xl font-black uppercase tracking-widest">Legg til mål</button>
+        <h2 class="text-4xl font-black italic uppercase tracking-tighter mb-10">New Skill</h2>
+        <input id="skill-input" type="text" placeholder="What are you practicing?" class="text-2xl font-bold border-b-4 border-black pb-4 focus:outline-none bg-transparent mb-10">
+        <button onclick="saveSkill()" class="w-full bg-black text-white py-5 rounded-2xl font-black uppercase tracking-widest">Add Goal</button>
     </div>
 
     <!-- Hobby Modal -->
     <div id="hobby-modal" class="hidden fixed inset-0 bg-white z-[650] p-10 flex flex-col">
         <button onclick="closeModals()" class="self-end text-2xl p-4">✕</button>
-        <h2 id="hobby-modal-title" class="text-4xl font-black italic uppercase tracking-tighter mb-10">Aktivitet</h2>
+        <h2 id="hobby-modal-title" class="text-4xl font-black italic uppercase tracking-tighter mb-10">Hobby</h2>
         <div class="mb-4">
-            <label class="text-[10px] font-black uppercase tracking-widest text-gray-400">Navn på aktivitet</label>
-            <input id="hobby-input" type="text" placeholder="f.eks. Skate, Ski, Surf..." class="w-full text-2xl font-bold border-b-4 border-black pb-4 focus:outline-none bg-transparent mt-2">
+            <label class="text-[10px] font-black uppercase tracking-widest text-gray-400">Activity Name</label>
+            <input id="hobby-input" type="text" placeholder="e.g. Skate, Ski, Surf..." class="w-full text-2xl font-bold border-b-4 border-black pb-4 focus:outline-none bg-transparent mt-2">
         </div>
         <div class="flex flex-col gap-4 mt-10">
-            <button onclick="saveHobby()" class="w-full bg-black text-white py-5 rounded-2xl font-black uppercase tracking-widest">Lagre</button>
-            <button id="delete-hobby-btn" onclick="deleteHobby()" class="w-full bg-red-50 text-red-500 py-4 rounded-2xl font-black uppercase tracking-[0.2em] text-[10px] hidden">Slett Aktivitet</button>
+            <button onclick="saveHobby()" class="w-full bg-black text-white py-5 rounded-2xl font-black uppercase tracking-widest">Save</button>
+            <button id="delete-hobby-btn" onclick="deleteHobby()" class="w-full bg-red-50 text-red-500 py-4 rounded-2xl font-black uppercase tracking-[0.2em] text-[10px] hidden">Delete Hobby</button>
         </div>
     </div>
 
     <!-- Calendar Modal -->
     <div id="cal-modal" class="hidden fixed inset-0 bg-gray-950 z-[600] p-6 text-white flex flex-col overflow-y-auto no-scrollbar">
         <div class="flex justify-between items-center mb-4 px-4">
-             <button onclick="closeModals()" class="p-2 text-gray-500 font-black uppercase tracking-widest text-[10px]">← Tilbake</button>
-             <h2 class="text-sm font-black italic uppercase tracking-widest">Kalender</h2>
+             <button onclick="closeModals()" class="p-2 text-gray-500 font-black uppercase tracking-widest text-[10px]">← Back</button>
+             <h2 class="text-sm font-black italic uppercase tracking-widest">Calendar</h2>
         </div>
 
         <div class="flex items-center justify-between px-4 mb-6">
             <button onclick="changeMonth(-1)" class="p-2 text-white/50 hover:text-white">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M15 19l-7-7 7-7"/></svg>
             </button>
-            <div id="cal-month-name" class="text-xl font-black italic uppercase tracking-tighter">Januar 2026</div>
+            <div id="cal-month-name" class="text-xl font-black italic uppercase tracking-tighter">January 2026</div>
             <button onclick="changeMonth(1)" class="p-2 text-white/50 hover:text-white">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M9 5l7 7-7 7"/></svg>
             </button>
@@ -687,17 +240,385 @@
         <div class="space-y-4 px-4 pb-12">
             <div class="bg-white/5 p-6 rounded-[2rem] flex justify-between items-center">
                 <div>
-                    <div class="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Gjeldende Streak</div>
+                    <div class="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Current Streak</div>
                     <div id="cal-streak" class="text-3xl font-black italic text-orange-500">0 🔥</div>
                 </div>
                 <div class="text-right">
-                    <div class="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Økter (<span id="cal-active-h-name">...</span>)</div>
-                    <div id="cal-total" class="text-3xl font-black italic text-[var(--brand-neon)]">0 Dager</div>
+                    <div class="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Sessions (<span id="cal-active-h-name">...</span>)</div>
+                    <div id="cal-total" class="text-3xl font-black italic text-[var(--brand-neon)]">0 Days</div>
                 </div>
             </div>
         </div>
     </div>
 
+    <script>
+        let state = JSON.parse(localStorage.getItem('tm_v6_pro_v2')) || {
+            onboarded: false,
+            isPro: false,
+            hobbies: [], 
+            activeHobby: "",
+            view: "goals",
+            skills: [],
+            sessions: [],
+            expandedYears: [new Date().getFullYear()]
+        };
+
+        let currentCalDate = new Date();
+        const onboardingSteps = [
+            { t: "FOCUS", d: "TrickMaster helps you master the skills you dream of. Simple and effective." },
+            { t: "CONSISTENCY", d: "We track your streak across all sports. Skate today, surf tomorrow - keep the fire alive." },
+            { t: "MASTERY", d: "When you master a skill, it's archived forever. Build your legacy." }
+        ];
+        let obStep = 0;
+        let editingHobbyName = null;
+        let pressTimer;
+
+        function init() {
+            setTimeout(() => {
+                const splash = document.getElementById('splash');
+                if(splash) {
+                    splash.style.opacity = '0';
+                    setTimeout(() => splash.remove(), 500);
+                }
+            }, 1000);
+
+            if (!state.onboarded) {
+                document.getElementById('onboarding').classList.remove('hidden');
+                updateOnboarding();
+            }
+            render();
+        }
+
+        function updateOnboarding() {
+            document.getElementById('ob-title').innerText = onboardingSteps[obStep].t;
+            document.getElementById('ob-text').innerText = onboardingSteps[obStep].d;
+        }
+
+        function handleOnboardingNext() {
+            if (obStep < onboardingSteps.length - 1) {
+                obStep++;
+                updateOnboarding();
+            } else if (obStep === onboardingSteps.length - 1) {
+                document.getElementById('onboarding-step-content').classList.add('hidden');
+                document.getElementById('onboarding-hobby-input').classList.remove('hidden');
+                document.getElementById('ob-btn').innerText = "Get Started";
+                obStep++;
+            } else {
+                const name = document.getElementById('first-hobby-name').value.trim();
+                if (!name) return;
+                state.hobbies = [name];
+                state.activeHobby = name;
+                state.onboarded = true;
+                save();
+                document.getElementById('onboarding').remove();
+            }
+        }
+
+        function save() { localStorage.setItem('tm_v6_pro_v2', JSON.stringify(state)); render(); }
+
+        function processPayment() {
+            const btn = document.getElementById('buy-pro-btn');
+            btn.innerHTML = `<span class="animate-pulse">Processing...</span>`;
+            btn.disabled = true;
+            
+            setTimeout(() => {
+                state.isPro = true;
+                save();
+                confetti({particleCount: 150, spread: 70, origin: { y: 0.6 }});
+                document.getElementById('pro-content').classList.add('hidden');
+                document.getElementById('pro-success').classList.remove('hidden');
+            }, 1500);
+        }
+
+        function handleHobbyTouchStart(h) {
+            pressTimer = window.setTimeout(function() {
+                openHobbyModal(h);
+            }, 600);
+        }
+
+        function handleHobbyTouchEnd() {
+            clearTimeout(pressTimer);
+        }
+
+        function render() {
+            const hobbySkills = state.skills.filter(s => s.h === state.activeHobby);
+            const activeHobbySkills = hobbySkills.filter(s => !s.l);
+            const landed = hobbySkills.filter(s => s.l);
+            const pct = hobbySkills.length ? Math.round((landed.length / hobbySkills.length) * 100) : 0;
+            
+            document.getElementById('prog-circle').style.strokeDashoffset = 264 - (pct/100)*264;
+            document.getElementById('prog-text').innerText = pct + "%";
+            document.getElementById('view-title').innerText = state.view === 'goals' ? "Skills" : "Archive";
+            document.getElementById('view-sub').innerText = state.activeHobby ? state.activeHobby + " • " + hobbySkills.length + " Total" : "Choose a hobby";
+            
+            if (state.isPro) {
+                document.getElementById('pro-badge').classList.remove('hidden');
+            } else {
+                document.getElementById('pro-badge').classList.add('hidden');
+            }
+
+            const streak = calcStreak();
+            const sb = document.getElementById('streak-badge');
+            if (streak > 0) { sb.classList.remove('hidden'); document.getElementById('streak-val').innerText = streak; }
+            else sb.classList.add('hidden');
+
+            document.getElementById('stat-hobby-name').innerText = state.activeHobby || "---";
+            document.getElementById('stat-sessions').innerText = state.sessions.filter(s => s.h === state.activeHobby).length + " Sessions";
+            renderWeekDots();
+
+            document.getElementById('hobby-tabs').innerHTML = state.hobbies.map(h => `
+                <div class="hobby-tab flex items-center shrink-0 bg-gray-50 px-4 py-2 rounded-full border ${state.activeHobby===h?'border-black bg-white shadow-sm':'border-transparent'}"
+                     onmousedown="handleHobbyTouchStart('${h}')" 
+                     onmouseup="handleHobbyTouchEnd()"
+                     ontouchstart="handleHobbyTouchStart('${h}')" 
+                     ontouchend="handleHobbyTouchEnd()">
+                    <button onclick="state.activeHobby='${h}';save();" class="text-[10px] font-black uppercase tracking-wider ${state.activeHobby===h?'text-black':'text-gray-400'}">
+                        ${h}
+                    </button>
+                </div>
+            `).join('');
+
+            const list = document.getElementById('main-content');
+            
+            if (!state.activeHobby) {
+                list.innerHTML = `<div class="py-20 text-center text-gray-300 text-[10px] font-black uppercase tracking-[0.2em]">Add a hobby first</div>`;
+            } else if (state.view === 'history') {
+                if (landed.length === 0) {
+                    list.innerHTML = `<div class="py-20 text-center text-gray-200 text-[10px] font-black uppercase tracking-[0.2em]">No skills landed yet</div>`;
+                } else {
+                    const grouped = landed.reduce((acc, s) => {
+                        const year = s.d.split('.').pop();
+                        if (!acc[year]) acc[year] = [];
+                        acc[year].push(s);
+                        return acc;
+                    }, {});
+
+                    const years = Object.keys(grouped).sort((a, b) => b - a);
+                    
+                    list.innerHTML = years.map(year => {
+                        const isOpen = state.expandedYears.includes(parseInt(year));
+                        const items = grouped[year].sort((a,b) => new Date(b.d.split('.').reverse().join('-')) - new Date(a.d.split('.').reverse().join('-')));
+                        
+                        return `
+                        <div class="mb-4 ${isOpen ? 'accordion-open' : ''}">
+                            <button onclick="toggleYear(${year})" class="w-full flex justify-between items-center py-4 border-b-2 border-black">
+                                <span class="text-2xl font-black italic uppercase tracking-tighter">${year}</span>
+                                <svg class="rotate-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                            </button>
+                            <div class="accordion-content">
+                                ${items.map(s => `
+                                    <div class="flex justify-between items-center py-4 border-b border-gray-100 fade-in">
+                                        <div>
+                                            <div class="text-[10px] font-black uppercase text-gray-400 tracking-widest leading-none mb-1">${s.d}</div>
+                                            <div class="text-sm font-bold text-gray-800">${s.n}</div>
+                                        </div>
+                                        <button onclick="unland(${s.id})" class="text-[8px] font-black uppercase tracking-widest bg-gray-50 px-3 py-1.5 rounded-full text-gray-400 hover:text-black">Undo</button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                        `;
+                    }).join('');
+                }
+            } else {
+                list.innerHTML = activeHobbySkills.length === 0 ? `<div class="py-20 text-center text-gray-200 text-[10px] font-black uppercase tracking-[0.2em]">No goals here yet</div>` :
+                activeHobbySkills.map(s => `
+                    <div class="mb-8 fade-in">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-xl font-extrabold tracking-tight">${s.n}</h3>
+                            <button onclick="delSkill(${s.id})" class="text-gray-200 p-2">✕</button>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2">
+                            <button onclick="setS(${s.id},1)" class="py-4 rounded-2xl border text-[9px] font-black uppercase ${s.s===1?'bg-black text-white':'border-gray-100 text-gray-300'}">Ready</button>
+                            <button onclick="setS(${s.id},2)" class="py-4 rounded-2xl border text-[9px] font-black uppercase ${s.s===2?'bg-orange-500 text-white border-orange-500':'border-gray-100 text-gray-300'}">Trying</button>
+                            <button onclick="land(${s.id})" class="py-4 rounded-2xl border border-gray-100 text-[9px] font-black uppercase hover:bg-[var(--brand-neon)] hover:text-black transition-all">Landed!</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            document.getElementById('icon-goals').style.color = state.view === 'goals' ? '#000' : '#d1d5db';
+            document.getElementById('icon-history').style.color = state.view === 'history' ? '#000' : '#d1d5db';
+            
+            if(!document.getElementById('cal-modal').classList.contains('hidden')) renderCalendar();
+        }
+
+        function toggleYear(year) {
+            const y = parseInt(year);
+            if (state.expandedYears.includes(y)) {
+                state.expandedYears = state.expandedYears.filter(item => item !== y);
+            } else {
+                state.expandedYears.push(y);
+            }
+            save();
+        }
+
+        function calcStreak() {
+            const days = [...new Set(state.sessions.map(s => new Date(s.t).toDateString()))]
+                .map(d => new Date(d)).sort((a,b) => b-a);
+            if (!days.length) return 0;
+            const today = new Date(new Date().toDateString());
+            const yesterday = new Date(today); yesterday.setDate(today.getDate()-1);
+            if (days[0] < yesterday) return 0;
+            let s = 1;
+            for (let i=0; i<days.length-1; i++) {
+                if (Math.abs(days[i]-days[i+1])/(1000*60*60*24) <= 1) s++; else break;
+            }
+            return s;
+        }
+
+        function renderWeekDots() {
+            const now = new Date();
+            const start = new Date(now.setDate(now.getDate() - (now.getDay()||7) + 1));
+            let h = "";
+            for(let i=0; i<7; i++) {
+                const d = new Date(start); d.setDate(start.getDate()+i);
+                const done = state.sessions.some(s => new Date(s.t).toDateString() === d.toDateString() && s.h === state.activeHobby);
+                h += `<div class="w-2.5 h-2.5 rounded-full ${done?'bg-[var(--brand-neon)] shadow-[0_0_8px_var(--brand-neon)]':'bg-white/10'}"></div>`;
+            }
+            document.getElementById('week-dots').innerHTML = h;
+        }
+
+        function logSession() {
+            if (!state.activeHobby) return;
+            const todayStr = new Date().toDateString();
+            if (state.sessions.some(s => new Date(s.t).toDateString() === todayStr && s.h === state.activeHobby)) return;
+            state.sessions.push({t: Date.now(), h: state.activeHobby});
+            confetti({particleCount: 50, spread: 60, colors: ['#d4ff00', '#000000']});
+            save();
+        }
+
+        function changeMonth(dir) {
+            currentCalDate.setMonth(currentCalDate.getMonth() + dir);
+            renderCalendar();
+        }
+
+        function toggleManualSession(timestamp) {
+            if (!state.activeHobby) return;
+            const dateStr = new Date(timestamp).toDateString();
+            const index = state.sessions.findIndex(s => new Date(s.t).toDateString() === dateStr && s.h === state.activeHobby);
+            if (index > -1) state.sessions.splice(index, 1);
+            else state.sessions.push({t: timestamp, h: state.activeHobby});
+            save();
+        }
+
+        function renderCalendar() {
+            const grid = document.getElementById('calendar-grid');
+            grid.innerHTML = "";
+            
+            const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            document.getElementById('cal-month-name').innerText = `${monthNames[currentCalDate.getMonth()]} ${currentCalDate.getFullYear()}`;
+            
+            const firstDayOfMonth = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth(), 1).getDay();
+            const adjustedFirstDay = firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1;
+            const daysInMonth = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + 1, 0).getDate();
+            
+            for(let i=0; i<adjustedFirstDay; i++) grid.innerHTML += `<div class="aspect-square opacity-0"></div>`;
+
+            let totalActiveLogged = 0;
+            document.getElementById('cal-active-h-name').innerText = state.activeHobby || "Active";
+
+            for(let i=1; i<=daysInMonth; i++) {
+                const targetDate = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth(), i);
+                const dateCheck = targetDate.toDateString();
+                const daySessions = state.sessions.filter(s => new Date(s.t).toDateString() === dateCheck);
+                const hasActive = daySessions.some(s => s.h === state.activeHobby);
+                const hasOthers = daySessions.some(s => s.h !== state.activeHobby);
+                
+                if (hasActive) totalActiveLogged++;
+
+                let dotClass = "cal-dot-empty";
+                if (hasActive && hasOthers) dotClass = "cal-dot-multi";
+                else if (hasActive) dotClass = "cal-dot-active";
+                else if (hasOthers) dotClass = "cal-dot-other";
+
+                grid.innerHTML += `<button onclick="toggleManualSession(${targetDate.getTime()})" class="aspect-square rounded-xl flex items-center justify-center text-[10px] transition-all active:scale-90 ${dotClass}">${i}</button>`;
+            }
+            
+            document.getElementById('cal-streak').innerText = calcStreak() + " 🔥";
+            document.getElementById('cal-total').innerText = totalActiveLogged + " Days";
+        }
+
+        function saveSkill() {
+            const n = document.getElementById('skill-input').value.trim();
+            if (!n || !state.activeHobby) return;
+            const activeHobbySkills = state.skills.filter(s => s.h === state.activeHobby && !s.l);
+            if (!state.isPro && activeHobbySkills.length >= 2) {
+                closeModals();
+                document.getElementById('pro-modal').classList.remove('hidden');
+                return;
+            }
+            state.skills.push({id:Date.now(), n, h:state.activeHobby, s:1, l:false});
+            document.getElementById('skill-input').value = "";
+            closeModals();
+            save();
+        }
+
+        function land(id) {
+            const s = state.skills.find(x => x.id === id);
+            s.l = true; 
+            const d = new Date();
+            s.d = `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}.${d.getFullYear()}`;
+            confetti({particleCount: 200, spread: 120, origin: { y: 0.6 }, colors: ['#d4ff00', '#000000', '#ffffff']});
+            save();
+        }
+
+        function unland(id) { state.skills.find(x => x.id===id).l = false; save(); }
+        function delSkill(id) { state.skills = state.skills.filter(x => x.id!==id); save(); }
+        function setS(id, s) { state.skills.find(x => x.id===id).s = s; save(); }
+        function changeView(v) { state.view = v; save(); }
+
+        function openHobbyModal(hobbyName = null) {
+            editingHobbyName = hobbyName;
+            if (!hobbyName && !state.isPro && state.hobbies.length >= 1) {
+                document.getElementById('pro-modal').classList.remove('hidden');
+                return;
+            }
+            const modal = document.getElementById('hobby-modal');
+            const input = document.getElementById('hobby-input');
+            const delBtn = document.getElementById('delete-hobby-btn');
+            input.value = hobbyName || "";
+            if (hobbyName) delBtn.classList.remove('hidden'); else delBtn.classList.add('hidden');
+            modal.classList.remove('hidden');
+        }
+
+        function saveHobby() {
+            const newName = document.getElementById('hobby-input').value.trim();
+            if (!newName) return;
+            if (editingHobbyName) {
+                state.hobbies = state.hobbies.map(h => h === editingHobbyName ? newName : h);
+                state.skills.forEach(s => { if(s.h === editingHobbyName) s.h = newName; });
+                state.sessions.forEach(s => { if(s.h === editingHobbyName) s.h = newName; });
+                if (state.activeHobby === editingHobbyName) state.activeHobby = newName;
+            } else {
+                state.hobbies.push(newName);
+                if (!state.activeHobby) state.activeHobby = newName;
+            }
+            closeModals(); save();
+        }
+
+        function deleteHobby() {
+            if (!editingHobbyName) return;
+            state.hobbies = state.hobbies.filter(h => h !== editingHobbyName);
+            state.skills = state.skills.filter(s => s.h !== editingHobbyName);
+            state.sessions = state.sessions.filter(s => s.h !== editingHobbyName);
+            if (state.activeHobby === editingHobbyName) state.activeHobby = state.hobbies[0] || "";
+            closeModals(); save();
+        }
+
+        function openAddSkill() { if(!state.activeHobby) return openHobbyModal(); document.getElementById('skill-modal').classList.remove('hidden'); }
+        function closeModals() { 
+            document.querySelectorAll('[id$="-modal"]').forEach(m => m.classList.add('hidden')); 
+            document.getElementById('pro-modal').classList.add('hidden');
+            document.getElementById('pro-content').classList.remove('hidden');
+            document.getElementById('pro-success').classList.add('hidden');
+            const btn = document.getElementById('buy-pro-btn');
+            btn.innerHTML = `Unlock for $4.99`;
+            btn.disabled = false;
+        }
+        function toggleCalendar() { document.getElementById('cal-modal').classList.remove('hidden'); renderCalendar(); }
+        window.onload = init;
+    </script>
 </body>
 </html>
 
