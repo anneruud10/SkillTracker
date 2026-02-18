@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>TrickMaster Pro Cloud</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Konfigurasjon
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'trickmaster-pro';
+
+        let currentUser = null;
+        let unsubscribeData = null;
+
+        // App Tilstand
+        window.state = {
+            onboarded: false,
+            isPro: false,
+            hobbies: [], 
+            activeHobby: "",
+            view: "goals",
+            skills: [],
+            sessions: [],
+            expandedYears: [new Date().getFullYear()],
+            isSyncing: false
+        };
+
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Autentiseringsfeil:", error);
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                setupFirestoreListeners();
+            } else {
+                initAuth();
+            }
+        });
+
+        function setupFirestoreListeners() {
+            if (unsubscribeData) unsubscribeData();
+            const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'settings', 'profile');
+            unsubscribeData = onSnapshot(userDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    window.state = { ...window.state, ...docSnap.data() };
+                    render();
+                } else {
+                    saveToCloud();
+                }
+            }, (error) => console.error("Firestore feil:", error));
+        }
+
+        window.saveToCloud = async () => {
+            if (!currentUser) return;
+            window.state.isSyncing = true;
+            render();
+            try {
+                const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'settings', 'profile');
+                await setDoc(userDocRef, { ...window.state }, { merge: true });
+                setTimeout(() => { window.state.isSyncing = false; render(); }, 500);
+            } catch (error) {
+                window.state.isSyncing = false; render();
+            }
+        };
+
+        let currentCalDate = new Date();
+        const onboardingSteps = [
+            { t: "FOKUS", d: "TrickMaster hjelper deg å mestre ferdighetene du drømmer om. Enkelt og effektivt." },
+            { t: "KONSEKVENS", d: "Vi sporer din 'streak' på tvers av alle idretter. Hold liv i flammen." },
+            { t: "MESTRING", d: "Når du lander et triks, arkiveres det for alltid. Bygg din arv." }
+        ];
+        let obStep = 0;
+
+        window.init = () => {
+            setTimeout(() => {
+                const splash = document.getElementById('splash');
+                if(splash) {
+                    splash.style.opacity = '0';
+                    setTimeout(() => splash.remove(), 500);
+                }
+            }, 1000);
+            render();
+        };
+
+        window.handleOnboardingNext = () => {
+            if (obStep < onboardingSteps.length - 1) {
+                obStep++;
+                document.getElementById('ob-title').innerText = onboardingSteps[obStep].t;
+                document.getElementById('ob-text').innerText = onboardingSteps[obStep].d;
+            } else if (obStep === onboardingSteps.length - 1) {
+                document.getElementById('onboarding-step-content').classList.add('hidden');
+                document.getElementById('onboarding-hobby-input').classList.remove('hidden');
+                document.getElementById('ob-btn').innerText = "Kom i gang";
+                obStep++;
+            } else {
+                const name = document.getElementById('first-hobby-name').value.trim();
+                if (!name) return;
+                window.state.hobbies = [name];
+                window.state.activeHobby = name;
+                window.state.onboarded = true;
+                saveToCloud();
+                document.getElementById('onboarding').classList.add('hidden');
+            }
+        };
+
+        window.render = () => {
+            if (window.state.onboarded) document.getElementById('onboarding').classList.add('hidden');
+            else document.getElementById('onboarding').classList.remove('hidden');
+
+            const syncDot = document.getElementById('sync-status');
+            syncDot.className = window.state.isSyncing ? "w-2 h-2 rounded-full bg-orange-400 animate-pulse" : "w-2 h-2 rounded-full bg-green-500";
+
+            const hobbySkills = window.state.skills.filter(s => s.h === window.state.activeHobby);
+            const activeHobbySkills = hobbySkills.filter(s => !s.l);
+            const landed = hobbySkills.filter(s => s.l);
+            const pct = hobbySkills.length ? Math.round((landed.length / hobbySkills.length) * 100) : 0;
+            
+            document.getElementById('prog-circle').style.strokeDashoffset = 264 - (pct/100)*264;
+            document.getElementById('prog-text').innerText = pct + "%";
+            document.getElementById('view-title').innerText = window.state.view === 'goals' ? "Skills" : "Arkiv";
+            document.getElementById('view-sub').innerText = window.state.activeHobby ? window.state.activeHobby + " • " + hobbySkills.length + " Totalt" : "Velg aktivitet";
+
+            const streak = calcStreak();
+            const sb = document.getElementById('streak-badge');
+            if (streak > 0) { sb.classList.remove('hidden'); document.getElementById('streak-val').innerText = streak; }
+            else sb.classList.add('hidden');
+
+            document.getElementById('stat-hobby-name').innerText = window.state.activeHobby || "---";
+            document.getElementById('stat-sessions').innerText = window.state.sessions.filter(s => s.h === window.state.activeHobby).length + " Økter";
+            
+            renderWeekDots();
+
+            document.getElementById('hobby-tabs').innerHTML = window.state.hobbies.map(h => `
+                <div class="hobby-tab flex items-center shrink-0 bg-gray-50 px-4 py-2 rounded-full border ${window.state.activeHobby===h?'border-black bg-white shadow-sm':'border-transparent'}"
+                     onclick="state.activeHobby='${h}';saveToCloud();">
+                    <span class="text-[10px] font-black uppercase tracking-wider ${window.state.activeHobby===h?'text-black':'text-gray-400'}">${h}</span>
+                </div>
+            `).join('');
+
+            const list = document.getElementById('main-content');
+            if (!window.state.activeHobby) {
+                list.innerHTML = `<div class="py-20 text-center text-gray-300 text-[10px] font-black uppercase tracking-[0.2em]">Legg til en aktivitet</div>`;
+            } else if (window.state.view === 'history') {
+                list.innerHTML = landed.length === 0 ? `<div class="py-20 text-center text-gray-200 text-[10px] font-black uppercase tracking-[0.2em]">Ingenting i arkivet</div>` : 
+                landed.map(s => `
+                    <div class="flex justify-between items-center py-4 border-b border-gray-100 fade-in">
+                        <div>
+                            <div class="text-[10px] font-black uppercase text-gray-400 tracking-widest leading-none mb-1">${s.d}</div>
+                            <div class="text-sm font-bold text-gray-800">${s.n}</div>
+                        </div>
+                        <button onclick="unland(${s.id})" class="text-[8px] font-black uppercase tracking-widest bg-gray-50 px-3 py-1.5 rounded-full text-gray-400">Angre</button>
+                    </div>
+                `).join('');
+            } else {
+                list.innerHTML = activeHobbySkills.map(s => `
+                    <div class="mb-8 fade-in">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-xl font-extrabold tracking-tight">${s.n}</h3>
+                            <button onclick="delSkill(${s.id})" class="text-gray-200 p-2">✕</button>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2">
+                            <button onclick="setS(${s.id},1)" class="py-4 rounded-2xl border text-[9px] font-black uppercase ${s.s===1?'bg-black text-white':'border-gray-100 text-gray-300'}">Klar</button>
+                            <button onclick="setS(${s.id},2)" class="py-4 rounded-2xl border text-[9px] font-black uppercase ${s.s===2?'bg-orange-500 text-white border-orange-500':'border-gray-100 text-gray-300'}">Øver</button>
+                            <button onclick="land(${s.id})" class="py-4 rounded-2xl border border-gray-100 text-[9px] font-black uppercase hover:bg-[var(--brand-neon)] hover:text-black transition-all">Landa!</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        };
+
+        function calcStreak() {
+            const days = [...new Set(window.state.sessions.map(s => new Date(s.t).toDateString()))].map(d => new Date(d)).sort((a,b) => b-a);
+            if (!days.length) return 0;
+            const today = new Date(new Date().toDateString());
+            const yesterday = new Date(today); yesterday.setDate(today.getDate()-1);
+            if (days[0] < yesterday) return 0;
+            let s = 1;
+            for (let i=0; i<days.length-1; i++) { if (Math.abs(days[i]-days[i+1])/(1000*60*60*24) <= 1) s++; else break; }
+            return s;
+        }
+
+        function renderWeekDots() {
+            const now = new Date();
+            const start = new Date(now.setDate(now.getDate() - (now.getDay()||7) + 1));
+            let h = "";
+            for(let i=0; i<7; i++) {
+                const d = new Date(start); d.setDate(start.getDate()+i);
+                const done = window.state.sessions.some(s => new Date(s.t).toDateString() === d.toDateString());
+                h += `<div class="w-2.5 h-2.5 rounded-full ${done?'bg-[var(--brand-neon)] shadow-[0_0_8px_var(--brand-neon)]':'bg-white/10'}"></div>`;
+            }
+            document.getElementById('week-dots').innerHTML = h;
+        }
+
+        window.logSession = () => {
+            if (!window.state.activeHobby) return;
+            window.state.sessions.push({t: Date.now(), h: window.state.activeHobby});
+            confetti({particleCount: 50, spread: 60, colors: ['#d4ff00', '#000000']});
+            saveToCloud();
+        };
+
+        window.saveSkill = () => {
+            const n = document.getElementById('skill-input').value.trim();
+            if (!n || !window.state.activeHobby) return;
+            window.state.skills.push({id:Date.now(), n, h:window.state.activeHobby, s:1, l:false});
+            document.getElementById('skill-input').value = "";
+            document.getElementById('skill-modal').classList.add('hidden');
+            saveToCloud();
+        };
+
+        window.land = (id) => {
+            const s = window.state.skills.find(x => x.id === id);
+            s.l = true; 
+            const d = new Date();
+            s.d = `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}.${d.getFullYear()}`;
+            confetti({particleCount: 200, spread: 120, origin: { y: 0.6 }, colors: ['#d4ff00', '#000000']});
+            saveToCloud();
+        };
+
+        window.unland = (id) => { window.state.skills.find(x => x.id===id).l = false; saveToCloud(); };
+        window.delSkill = (id) => { window.state.skills = window.state.skills.filter(x => x.id!==id); saveToCloud(); };
+        window.setS = (id, s) => { window.state.skills.find(x => x.id===id).s = s; saveToCloud(); };
+        window.changeView = (v) => { window.state.view = v; render(); };
+        window.onload = init;
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+        :root { --brand-neon: #d4ff00; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; background-color: #ffffff; color: #1a1a1a; }
+        .progress-ring-circle { transition: stroke-dashoffset 0.8s ease-in-out; transform: rotate(-90deg); transform-origin: 50% 50%; }
+        #splash { position: fixed; inset: 0; background: #000; z-index: 1000; display: flex; align-items: center; justify-content: center; transition: opacity 0.5s ease-out; }
+        .fade-in { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="max-w-md mx-auto min-h-screen flex flex-col overflow-x-hidden">
+
+    <div id="splash">
+        <div class="text-[var(--brand-neon)] text-6xl font-black italic tracking-tighter">TM</div>
+    </div>
+
+    <div class="fixed top-2 right-4 z-[1000]">
+        <div id="sync-status" class="w-2 h-2 rounded-full bg-gray-300"></div>
+    </div>
+
+    <!-- Onboarding -->
+    <div id="onboarding" class="hidden fixed inset-0 bg-white z-[500] flex flex-col p-10 justify-center">
+        <div id="onboarding-step-content">
+            <h2 id="ob-title" class="text-5xl font-black italic uppercase tracking-tighter mb-6">FOKUS</h2>
+            <p id="ob-text" class="text-gray-500 text-lg mb-10">Laster...</p>
+        </div>
+        <div id="onboarding-hobby-input" class="hidden">
+            <h2 class="text-4xl font-black italic uppercase tracking-tighter mb-4">Hva driver du med?</h2>
+            <input id="first-hobby-name" type="text" placeholder="F.eks. Skate" class="w-full text-2xl font-bold border-b-4 border-black pb-4 focus:outline-none mb-10">
+        </div>
+        <button id="ob-btn" onclick="handleOnboardingNext()" class="w-full bg-black text-white py-6 rounded-[2rem] font-black uppercase tracking-widest text-sm">Neste</button>
+    </div>
+
+    <!-- Header -->
+    <header class="px-6 pt-8 pb-4 flex justify-between items-end">
+        <div class="flex items-center gap-4">
+            <div class="relative w-16 h-16 flex items-center justify-center">
+                <svg width="64" height="64" viewBox="0 0 100 100">
+                    <circle cx="50" cy="50" r="42" stroke="#f3f4f6" stroke-width="8" fill="none" />
+                    <circle id="prog-circle" class="progress-ring-circle" cx="50" cy="50" r="42" stroke="#d4ff00" stroke-width="8" fill="none" stroke-dasharray="264" stroke-dashoffset="264" stroke-linecap="round" />
+                </svg>
+                <div id="prog-text" class="absolute text-[10px] font-black">0%</div>
+                <div id="streak-badge" class="absolute -top-1 -right-1 bg-orange-500 text-white px-2 py-1 rounded-full text-[10px] font-black hidden">🔥 <span id="streak-val">0</span></div>
+            </div>
+            <div>
+                <h1 id="view-title" class="text-4xl font-extrabold italic uppercase tracking-tighter leading-none">Skills</h1>
+                <p id="view-sub" class="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-1">Laster...</p>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Card -->
+    <section class="px-6 my-4">
+        <div class="bg-black rounded-[2.5rem] p-7 text-white shadow-2xl">
+            <div class="flex justify-between items-center mb-6">
+                <div class="flex-1">
+                    <p class="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-3">Denne uken</p>
+                    <div id="week-dots" class="flex gap-2"></div>
+                </div>
+                <button onclick="logSession()" class="bg-[var(--brand-neon)] text-black px-8 py-4 rounded-2xl text-xs font-black uppercase tracking-widest active:scale-95">Logg Økt</button>
+            </div>
+            <div class="flex justify-between text-[8px] font-black uppercase text-gray-500 border-t border-white/10 pt-4">
+                <span id="stat-sessions">0 Økter</span>
+                <span id="stat-hobby-name">---</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tabs -->
+    <section class="px-6 mb-4 overflow-x-auto">
+        <div id="hobby-tabs" class="flex gap-4 pb-2"></div>
+    </section>
+
+    <!-- Content -->
+    <main id="main-content" class="flex-1 px-6 pb-32 overflow-y-auto"></main>
+
+    <!-- Nav -->
+    <nav class="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/90 backdrop-blur-md border-t border-gray-100 px-10 pb-10 pt-4 flex justify-between items-center z-50">
+        <button onclick="changeView('goals')" class="flex flex-col items-center gap-1">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            <span class="text-[8px] font-black uppercase tracking-widest">Mål</span>
+        </button>
+        <button onclick="document.getElementById('skill-modal').classList.remove('hidden')" class="bg-black text-white w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl -mt-12 border-8 border-white">
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M12 4v16m8-8H4"/></svg>
+        </button>
+        <button onclick="changeView('history')" class="flex flex-col items-center gap-1">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+            <span class="text-[8px] font-black uppercase tracking-widest">Arkiv</span>
+        </button>
+    </nav>
+
+    <!-- Modal -->
+    <div id="skill-modal" class="hidden fixed inset-0 bg-white z-[600] p-10 flex flex-col">
+        <button onclick="document.getElementById('skill-modal').classList.add('hidden')" class="self-end text-2xl p-4">✕</button>
+        <h2 class="text-4xl font-black italic uppercase tracking-tighter mb-10">Ny Skill</h2>
+        <input id="skill-input" type="text" placeholder="Hva øver du på?" class="text-2xl font-bold border-b-4 border-black pb-4 focus:outline-none mb-10">
+        <button onclick="saveSkill()" class="w-full bg-black text-white py-5 rounded-2xl font-black uppercase tracking-widest">Legg til</button>
+    </div>
+
+</body>
+</html>
+
